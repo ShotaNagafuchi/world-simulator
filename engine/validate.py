@@ -5,7 +5,10 @@
 - 法則: kill_conditions 必須（殺せない法則は法則ではない）
 - 予測: 法則の引用必須（勘は予測ではない）、確率は (0,1)、期限・解決基準必須
 - シグナル: 出典・信用クラス・期限必須。予測に未接続なら警告
-- 参照整合性: 存在しない LAW / SIG / PRED への参照はエラー
+- 世界線: 反世界（anti-thesis）分岐と決定的観測セクション必須
+- 現在地 (state/): 更新周期必須。as_of + refresh_every_days を過ぎたら STALE 警告
+- 歴史 (history/): 出典必須。腐らないので期限チェックはない
+- 参照整合性: 存在しない LAW / SIG / PRED / WORLD への参照はエラー
 - 期限: 期限切れの open 予測（OVERDUE）と腐敗したシグナルを警告
 
 エラーがあれば exit 1。警告のみなら exit 0。
@@ -13,7 +16,7 @@
 
 import re
 import sys
-from datetime import date
+from datetime import date, timedelta
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
@@ -33,6 +36,9 @@ REQUIRED = {
     "prediction": {"id", "title", "statement", "probability", "laws", "horizon",
                    "resolution_criteria", "status"},
     "simulation": {"id", "title", "domain", "horizon", "laws", "branches"},
+    "state": {"id", "title", "domain", "as_of", "refresh_every_days",
+              "linked_simulations"},
+    "history": {"id", "title", "domains", "type", "sources"},
 }
 
 
@@ -51,7 +57,8 @@ def main() -> int:
 
     docs = {}  # kind -> list[(path, fm)]
     for kind, subdir in [("law", "laws"), ("case", "cases"), ("signal", "signals"),
-                         ("prediction", "predictions"), ("simulation", "simulations")]:
+                         ("prediction", "predictions"), ("simulation", "simulations"),
+                         ("state", "state"), ("history", "history")]:
         docs[kind] = []
         for path, fm, e in collect(ROOT / subdir):
             if e:
@@ -66,6 +73,7 @@ def main() -> int:
     sig_ids = {fm.get("id") for _, fm in docs["signal"]}
     pred_ids = {fm.get("id") for _, fm in docs["prediction"]}
     case_ids = {fm.get("id") for _, fm in docs["case"]}
+    sim_ids = {fm.get("id") for _, fm in docs["simulation"]}
     today = date.today().isoformat()
 
     # --- 法則 ---
@@ -155,8 +163,35 @@ def main() -> int:
         joined = " ".join(str(b) for b in branches)
         if "反世界" not in joined and "anti" not in joined.lower():
             err(path, "反世界 (anti-thesis) 分岐が見つからない。自己確証バイアスを構造で殺す掟")
+        body = path.read_text(encoding="utf-8")
+        if "決定的観測" not in body:
+            err(path, "「決定的観測」セクションがない。何を観測すべきかを持たない世界線は更新できない")
+
+    # --- 現在地 (state) ---
+    for path, fm in docs["state"]:
+        if not is_date(str(fm.get("as_of", ""))):
+            err(path, "as_of が YYYY-MM-DD でない")
+        days = fm.get("refresh_every_days")
+        if not isinstance(days, int) or days <= 0:
+            err(path, f"refresh_every_days は正の整数: {days}")
+        elif is_date(str(fm.get("as_of", ""))):
+            due = date.fromisoformat(fm["as_of"]) + timedelta(days=days)
+            if due.isoformat() < today:
+                warn(path, f"STALE: 最終更新 {fm['as_of']}、更新期限 {due.isoformat()} 超過。"
+                           "決定的観測リストを巡回して更新せよ")
+        for wid in fm.get("linked_simulations", []) or []:
+            if wid not in sim_ids:
+                err(path, f"存在しない世界線への参照: {wid}")
+
+    # --- 歴史 (history) ---
+    for path, fm in docs["history"]:
+        if fm.get("type") not in ("timeline", "data-series", "record"):
+            err(path, f"type が不正: {fm.get('type')} (timeline | data-series | record)")
+        if not fm.get("sources"):
+            err(path, "sources が空。出典のない歴史は伝聞である")
 
     print(f"検証対象: 法則 {len(docs['law'])} / 事例 {len(docs['case'])} / "
+          f"歴史 {len(docs['history'])} / 現在地 {len(docs['state'])} / "
           f"シグナル {len(docs['signal'])} / 予測 {len(docs['prediction'])} / "
           f"世界線 {len(docs['simulation'])}")
     for w in warnings:
