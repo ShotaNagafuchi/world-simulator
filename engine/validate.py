@@ -8,6 +8,8 @@
 - 世界線: 反世界（anti-thesis）分岐と決定的観測セクション必須
 - 現在地 (state/): 更新周期必須。as_of + refresh_every_days を過ぎたら STALE 警告
 - 歴史 (history/): 出典必須。腐らないので期限チェックはない
+- 制約 (constraints/): 層の分類と unfreeze_conditions 必須（解凍条件を書けない定数は、定数だと信じているだけの何か）
+- ポジション (positions/): 7つの質問すべてに回答必須（答えられないポジションは登録できない）
 - 参照整合性: 存在しない LAW / SIG / PRED / WORLD への参照はエラー
 - 期限: 期限切れの open 予測（OVERDUE）と腐敗したシグナルを警告
 
@@ -26,6 +28,10 @@ ROOT = Path(__file__).parent.parent
 
 LAW_STATUSES = {"active", "weakened", "falsified", "deprecated"}
 SOURCE_CLASSES = {"S0", "S1", "S2", "S3"}
+CONSTRAINT_LAYERS = {"physics", "human-nature", "institution", "industry-practice", "tech-cost"}
+CONSTRAINT_STATUSES = {"frozen", "thawing", "variable"}
+POSITION_STATUSES = {"exploring", "committed", "abandoned"}
+SEVEN_QUESTIONS = ["エンジニアリング", "タイミング", "独占", "人材", "販売", "永続性", "隠れた真実"]
 DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 
 REQUIRED = {
@@ -39,6 +45,10 @@ REQUIRED = {
     "state": {"id", "title", "domain", "as_of", "refresh_every_days",
               "linked_simulations"},
     "history": {"id", "title", "domains", "type", "sources"},
+    "constraint": {"id", "title", "layer", "status", "domains",
+                   "unfreeze_conditions", "linked_laws"},
+    "position": {"id", "title", "domain", "status", "laws", "constraints",
+                 "linked_simulations", "linked_predictions"},
 }
 
 
@@ -58,7 +68,8 @@ def main() -> int:
     docs = {}  # kind -> list[(path, fm)]
     for kind, subdir in [("law", "laws"), ("case", "cases"), ("signal", "signals"),
                          ("prediction", "predictions"), ("simulation", "simulations"),
-                         ("state", "state"), ("history", "history")]:
+                         ("state", "state"), ("history", "history"),
+                         ("constraint", "constraints"), ("position", "positions")]:
         docs[kind] = []
         for path, fm, e in collect(ROOT / subdir):
             if e:
@@ -190,10 +201,47 @@ def main() -> int:
         if not fm.get("sources"):
             err(path, "sources が空。出典のない歴史は伝聞である")
 
-    print(f"検証対象: 法則 {len(docs['law'])} / 事例 {len(docs['case'])} / "
-          f"歴史 {len(docs['history'])} / 現在地 {len(docs['state'])} / "
-          f"シグナル {len(docs['signal'])} / 予測 {len(docs['prediction'])} / "
-          f"世界線 {len(docs['simulation'])}")
+    # --- 制約 (constraints) ---
+    constraint_ids = {fm.get("id") for _, fm in docs["constraint"]}
+    for path, fm in docs["constraint"]:
+        if fm.get("layer") not in CONSTRAINT_LAYERS:
+            err(path, f"layer が不正: {fm.get('layer')} (許可: {sorted(CONSTRAINT_LAYERS)})")
+        if fm.get("status") not in CONSTRAINT_STATUSES:
+            err(path, f"status が不正: {fm.get('status')} (frozen | thawing | variable)")
+        if not fm.get("unfreeze_conditions"):
+            err(path, "unfreeze_conditions が空。解凍条件を書けない定数は、"
+                      "定数だと信じているだけの何かである")
+        for lid in fm.get("linked_laws", []) or []:
+            if lid not in law_ids:
+                err(path, f"存在しない法則への参照: {lid}")
+
+    # --- ポジション (positions) ---
+    for path, fm in docs["position"]:
+        if fm.get("status") not in POSITION_STATUSES:
+            err(path, f"status が不正: {fm.get('status')} (exploring | committed | abandoned)")
+        for lid in fm.get("laws", []) or []:
+            if lid not in law_ids:
+                err(path, f"存在しない法則への参照: {lid}")
+        for cid in fm.get("constraints", []) or []:
+            if cid not in constraint_ids:
+                err(path, f"存在しない制約への参照: {cid}")
+        for wid in fm.get("linked_simulations", []) or []:
+            if wid not in sim_ids:
+                err(path, f"存在しない世界線への参照: {wid}")
+        for pid in fm.get("linked_predictions", []) or []:
+            if pid not in pred_ids:
+                err(path, f"存在しない予測への参照: {pid}")
+        body = path.read_text(encoding="utf-8")
+        unanswered = [q for q in SEVEN_QUESTIONS if q not in body]
+        if unanswered:
+            err(path, f"7つの質問に未回答: {unanswered}。"
+                      "すべてに答えられないポジションは登録できない")
+
+    print(f"検証対象: 法則 {len(docs['law'])} / 制約 {len(docs['constraint'])} / "
+          f"事例 {len(docs['case'])} / 歴史 {len(docs['history'])} / "
+          f"現在地 {len(docs['state'])} / シグナル {len(docs['signal'])} / "
+          f"予測 {len(docs['prediction'])} / 世界線 {len(docs['simulation'])} / "
+          f"ポジション {len(docs['position'])}")
     for w in warnings:
         print(w)
     for e in errors:
