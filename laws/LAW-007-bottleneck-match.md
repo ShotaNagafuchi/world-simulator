@@ -7,7 +7,7 @@ confidence: 0.75
 domains: [content, energy, ev, space, web3]
 kill_conditions:
   - ボトルネックではない工程の摩擦低下（コスト桁減）が、当該産業の構造と資金配分を5年以内に大きく変えた事例が3件以上確認される
-evidence_cases: [CASE-2000-undigitized-industries, CASE-2015-spacex-reusability]
+evidence_cases: [CASE-2000-undigitized-industries, CASE-2015-spacex-reusability, CASE-2020-ai-surpasses]
 ---
 
 # 主張
